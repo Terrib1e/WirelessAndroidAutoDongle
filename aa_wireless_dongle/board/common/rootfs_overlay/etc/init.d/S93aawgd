@@ -17,7 +17,9 @@ case "$1" in
 		fi
 
 		printf "Starting $DAEMON: "
-		start-stop-daemon -S -b -q -m -p "$PIDFILE" -x "/usr/bin/$DAEMON"
+		# Launch under a supervisor so a crashed aawgd restarts automatically
+		# instead of leaving the head unit at "device not responding".
+		start-stop-daemon -S -b -q -m -p "$PIDFILE" -x "/usr/bin/aawgd-supervise"
 		RETVAL=$?
 		[ $RETVAL = 0 ] && echo "OK" || echo "FAIL"
 		;;

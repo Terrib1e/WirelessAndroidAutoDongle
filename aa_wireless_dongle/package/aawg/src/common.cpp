@@ -1,5 +1,9 @@
 #include <cstdlib>
 #include <cstdarg>
+#include <cstdio>
+#include <cstring>
+#include <cerrno>
+#include <ctime>
 #include <sstream>
 #include <fstream>
 #include <syslog.h>
@@ -30,6 +34,10 @@ std::string Config::getenv(std::string name, std::string defaultValue) {
 
 std::string Config::getMacAddress(std::string interface) {
     std::ifstream addressFile("/sys/class/net/" + interface + "/address");
+    if (!addressFile.is_open()) {
+        Logger::instance()->info("Config: could not open MAC address file for interface %s\n", interface.c_str());
+        return "";
+    }
 
     std::string macAddress;
     getline(addressFile, macAddress);
@@ -44,6 +52,9 @@ std::string Config::getUniqueSuffix() {
     }
 
     std::ifstream serialNumberFile("/sys/firmware/devicetree/base/serial-number");
+    if (!serialNumberFile.is_open()) {
+        Logger::instance()->info("Config: could not open device serial-number, using fallback suffix\n");
+    }
 
     std::string serialNumber;
     getline(serialNumberFile, serialNumber);
@@ -88,9 +99,29 @@ ConnectionStrategy Config::getConnectionStrategy() {
 
     return connectionStrategy.value();
 }
+
+int32_t Config::getUsbGadgetSwitchDelayMs() {
+    int32_t delay = getenv("AAWG_GADGET_SWITCH_DELAY_MS", 100);
+    if (delay < 0) {
+        delay = 100;
+    }
+    return delay;
+}
+
+std::string Config::getPreferredDevice() {
+    return getenv("AAWG_PREFERRED_DEVICE", std::string(""));
+}
+
+std::string Config::getStatusLed() {
+    return getenv("AAWG_STATUS_LED", std::string(""));
+}
 #pragma endregion Config
 
 #pragma region Logger
+static constexpr const char* PERSIST_LOG_PATH = "/persist/aawgd.log";
+static constexpr const char* PERSIST_LOG_PATH_OLD = "/persist/aawgd.log.1";
+static constexpr long PERSIST_LOG_MAX_BYTES = 256 * 1024;
+
 /*static*/ Logger* Logger::instance() {
     static Logger s_instance;
     return &s_instance;
@@ -98,9 +129,21 @@ ConnectionStrategy Config::getConnectionStrategy() {
 
 Logger::Logger() {
     openlog(nullptr, LOG_PERROR | LOG_PID, LOG_USER);
+
+    const char* persistEnv = std::getenv("AAWG_PERSIST_LOG");
+    if (persistEnv != nullptr && std::string(persistEnv) != "0" && std::string(persistEnv) != "") {
+        m_persistLog = fopen(PERSIST_LOG_PATH, "a");
+        if (m_persistLog == nullptr) {
+            syslog(LOG_WARNING, "Could not open persistent log %s: %s\n", PERSIST_LOG_PATH, strerror(errno));
+        }
+    }
 }
 
 Logger::~Logger() {
+    if (m_persistLog != nullptr) {
+        fclose(m_persistLog);
+        m_persistLog = nullptr;
+    }
     closelog();
 }
 
@@ -109,5 +152,39 @@ void Logger::info(const char *format, ...) {
     va_start(args, format);
     vsyslog(LOG_INFO, format, args);
     va_end(args);
+
+    if (m_persistLog != nullptr) {
+        va_list fileArgs;
+        va_start(fileArgs, format);
+        writeToPersistLog(format, fileArgs);
+        va_end(fileArgs);
+    }
+}
+
+void Logger::writeToPersistLog(const char *format, va_list args) {
+    time_t now = time(nullptr);
+    struct tm tmValue;
+    char timestamp[32];
+    if (localtime_r(&now, &tmValue) != nullptr &&
+        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &tmValue) > 0) {
+        fprintf(m_persistLog, "[%s] ", timestamp);
+    }
+
+    vfprintf(m_persistLog, format, args);
+    fflush(m_persistLog);
+
+    if (ftell(m_persistLog) >= PERSIST_LOG_MAX_BYTES) {
+        rotatePersistLog();
+    }
+}
+
+void Logger::rotatePersistLog() {
+    fclose(m_persistLog);
+    m_persistLog = nullptr;
+
+    // Keep a single previous generation; cap on-disk usage at 2x the max.
+    rename(PERSIST_LOG_PATH, PERSIST_LOG_PATH_OLD);
+
+    m_persistLog = fopen(PERSIST_LOG_PATH, "w");
 }
 #pragma endregion Logger

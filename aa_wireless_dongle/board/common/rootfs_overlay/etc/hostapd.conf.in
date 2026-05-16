@@ -10,7 +10,5 @@ wpa=2
 wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
 
-ssid=AAWirelessDongle
-
-#wpa_passphrase=ConnectAAWirelessDongle
-#country_code=IN
+# ssid, wpa_passphrase and country_code are appended at boot by
+# /etc/init.d/S39hostapd_conf from the values in /etc/aawgd.conf.

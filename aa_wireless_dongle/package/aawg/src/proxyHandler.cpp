@@ -15,6 +15,7 @@
 #include "usb.h"
 #include "bluetoothHandler.h"
 #include "proxyHandler.h"
+#include "statusled.h"
 
 void empty_signal_handler(int signal) {
     // Empty. We don't want to do anything but interrupt the thread.
@@ -66,7 +67,7 @@ ssize_t AAWProxy::readMessage(int fd, unsigned char *buffer, size_t buffer_len) 
 }
 
 void AAWProxy::forward(ProxyDirection direction, std::atomic<bool>& should_exit) {
-    size_t buffer_len = 16384;
+    constexpr size_t buffer_len = 16384;
     unsigned char buffer[buffer_len];
 
     bool read_message;
@@ -164,6 +165,7 @@ void AAWProxy::handleClient(int server_sock) {
     close(server_sock);
 
     Logger::instance()->info("Tcp server accepted connection\n");
+    StatusLed::instance().set(LedState::Connected);
 
     // Phone connected via TCP, we can stop retrying bluetooth connection
     BluetoothHandler::instance().stopConnectWithRetry();
@@ -177,6 +179,8 @@ void AAWProxy::handleClient(int server_sock) {
     Logger::instance()->info("Opening usb accessory\n");
     if ((m_usb_fd = open("/dev/usb_accessory", O_RDWR)) < 0) {
         Logger::instance()->info("error opening /dev/usb_accessory: %s\n", strerror(errno));
+        close(m_tcp_fd);
+        m_tcp_fd = -1;
         return;
     }
 
@@ -188,6 +192,10 @@ void AAWProxy::handleClient(int server_sock) {
 
     if (setsockopt(m_tcp_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv))) {
         Logger::instance()->info("setsockopt failed: %s\n", strerror(errno));
+        close(m_usb_fd);
+        m_usb_fd = -1;
+        close(m_tcp_fd);
+        m_tcp_fd = -1;
         return;
     }
 

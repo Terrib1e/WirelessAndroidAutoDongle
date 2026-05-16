@@ -52,6 +52,10 @@ UsbManager::UsbManager() {
 void UsbManager::writeGadgetFile(std::string gadgetName, std::string relativeFilePath, const char* content) {
     std::string gadgetFilePath = "/sys/kernel/config/usb_gadget/" + gadgetName + "/" + relativeFilePath;
     FILE* gadgetFile = fopen(gadgetFilePath.c_str(), "w");
+    if (gadgetFile == NULL) {
+        Logger::instance()->info("USB Manager: Error opening gadget file %s: %s\n", gadgetFilePath.c_str(), strerror(errno));
+        return;
+    }
     fputs(content, gadgetFile);
     fputc('\n', gadgetFile);
     fclose(gadgetFile);
@@ -67,7 +71,11 @@ void UsbManager::disableGadget(std::string gadgetName) {
 
 void UsbManager::switchToAccessoryGadget() {
     disableGadget(defaultGadgetName);
-    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 0.1 second, keep the gadget disabled for a short time to let the host recognize the change
+    // Keep the gadget disabled briefly so the host recognizes the change.
+    // The delay is configurable because some head units (e.g. Mazda Connect)
+    // need a longer settle time to re-enumerate reliably.
+    int32_t switchDelayMs = Config::instance()->getUsbGadgetSwitchDelayMs();
+    std::this_thread::sleep_for(std::chrono::milliseconds(switchDelayMs));
     enableGadget(accessoryGadgetName);
 
     Logger::instance()->info("USB Manager: Switched to accessory gadget from default\n");

@@ -1,0 +1,32 @@
+#!/bin/sh
+#
+# Supervise aawgd: restart it if it exits or crashes.
+#
+# aawgd is the only thing standing between the head unit and "device not
+# responding". If it ever terminates (crash, unhandled exception, killed),
+# the head unit is stuck until the dongle is physically re-plugged. This
+# wrapper restarts it automatically so the car recovers on its own.
+#
+
+DAEMON=/usr/bin/aawgd
+RESTART_DELAY=3
+CHILD_PID=
+
+term() {
+	if [ -n "$CHILD_PID" ]; then
+		kill "$CHILD_PID" 2>/dev/null
+		wait "$CHILD_PID" 2>/dev/null
+	fi
+	exit 0
+}
+trap term TERM INT
+
+while true; do
+	"$DAEMON" &
+	CHILD_PID=$!
+	wait "$CHILD_PID"
+	RETVAL=$?
+	CHILD_PID=
+	logger -t aawgd-supervise "aawgd exited with status ${RETVAL}, restarting in ${RESTART_DELAY}s"
+	sleep "$RESTART_DELAY"
+done

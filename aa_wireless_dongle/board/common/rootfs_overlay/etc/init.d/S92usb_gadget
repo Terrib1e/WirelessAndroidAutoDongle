@@ -3,9 +3,15 @@
 # Configure USB gadget interfaces
 #
 
-SERIAL_NUMBER="0123456"
-MANUFACTURER="My Own"
-PRODUCT="AA Wireless Dongle"
+if [ -z "$AAWG_CONF_SOURCED" ] && [ -f /etc/aawgd.conf ]; then
+	. /etc/aawgd.conf
+fi
+
+# USB gadget descriptor strings. Some head units (e.g. Mazda Connect) are
+# picky about these; they can be pinned to a known-good set via /etc/aawgd.conf.
+SERIAL_NUMBER="${AAWG_USB_SERIAL_NUMBER:-0123456}"
+MANUFACTURER="${AAWG_USB_MANUFACTURER:-My Own}"
+PRODUCT="${AAWG_USB_PRODUCT:-AA Wireless Dongle}"
 
 ACCESSORY_GADGET_NAME="accessory"
 DEFAULT_GADGET_NAME="default"

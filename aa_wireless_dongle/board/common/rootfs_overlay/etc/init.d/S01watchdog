@@ -1,0 +1,45 @@
+#!/bin/sh
+#
+# Start the hardware watchdog.
+#
+# If the system hangs hard (kernel lockup, wedged userspace) the watchdog
+# daemon stops petting /dev/watchdog and the SoC reboots the board on its
+# own, recovering the dongle without the driver having to power-cycle it.
+#
+
+DAEMON="watchdog"
+WATCHDOG_DEV="/dev/watchdog"
+# Hardware timeout (s) and petting interval (s). The interval must stay
+# comfortably below the timeout.
+HW_TIMEOUT=60
+PET_INTERVAL=30
+
+RETVAL=0
+
+case "$1" in
+	start)
+		printf "Starting $DAEMON: "
+		if [ ! -e "$WATCHDOG_DEV" ]; then
+			echo "SKIP (no $WATCHDOG_DEV)"
+			exit 0
+		fi
+		watchdog -T "$HW_TIMEOUT" -t "$PET_INTERVAL" "$WATCHDOG_DEV"
+		RETVAL=$?
+		[ $RETVAL = 0 ] && echo "OK" || echo "FAIL"
+		;;
+	stop)
+		printf "Stopping $DAEMON: "
+		start-stop-daemon -K -q -n "$DAEMON"
+		RETVAL=$?
+		[ $RETVAL = 0 ] && echo "OK" || echo "FAIL"
+		;;
+	restart)
+		"$0" stop
+		"$0" start
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+esac
+
+exit $RETVAL

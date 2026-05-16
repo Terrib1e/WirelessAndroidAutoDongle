@@ -12,9 +12,37 @@ case "$1" in
 
 		echo "Generate hostapd configuration at /var/run/hostapd.conf"
 
-		cp /etc/hostapd.conf.in /var/run/hostapd.conf
+		# Generate the access point config from the template, applying any
+		# wifi band / channel overrides from /etc/aawgd.conf.
+		if [ -n "${AAWG_WIFI_BAND}" ]; then
+			# Drop the template's band lines; they are regenerated below.
+			grep -v -E '^(hw_mode|channel|ieee80211ac)=' /etc/hostapd.conf.in > /var/run/hostapd.conf
+			case "${AAWG_WIFI_BAND}" in
+				5)
+					echo "hw_mode=a" >> /var/run/hostapd.conf
+					echo "ieee80211ac=1" >> /var/run/hostapd.conf
+					echo "channel=${AAWG_WIFI_CHANNEL:-36}" >> /var/run/hostapd.conf
+					;;
+				2.4)
+					echo "hw_mode=g" >> /var/run/hostapd.conf
+					echo "channel=${AAWG_WIFI_CHANNEL:-6}" >> /var/run/hostapd.conf
+					;;
+				*)
+					echo "Unknown AAWG_WIFI_BAND '${AAWG_WIFI_BAND}', expected 2.4 or 5"
+					cp /etc/hostapd.conf.in /var/run/hostapd.conf
+					;;
+			esac
+		elif [ -n "${AAWG_WIFI_CHANNEL}" ]; then
+			grep -v -E '^channel=' /etc/hostapd.conf.in > /var/run/hostapd.conf
+			echo "channel=${AAWG_WIFI_CHANNEL}" >> /var/run/hostapd.conf
+		else
+			cp /etc/hostapd.conf.in /var/run/hostapd.conf
+		fi
 
 		echo >> /var/run/hostapd.conf
+
+		# Add Wifi SSID (must match the SSID the daemon advertises to the phone)
+		echo "ssid=${AAWG_WIFI_SSID:-AAWirelessDongle}" >> /var/run/hostapd.conf
 
 		# Add Wifi password
 		if [ -n "${AAWG_WIFI_PASSWORD}" ]; then

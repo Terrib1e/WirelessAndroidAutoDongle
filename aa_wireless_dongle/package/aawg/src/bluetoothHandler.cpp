@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <algorithm>
+#include <cctype>
 
 #include "common.h"
 #include "bluetoothHandler.h"
@@ -193,6 +195,32 @@ void BluetoothHandler::connectDevice() {
 
     Logger::instance()->info("Found %d bluetooth devices\n", device_paths.size());
 
+    // If a preferred device is configured, try it first for a faster cold-start
+    // (and to avoid grabbing a passenger's phone). BlueZ device paths embed the
+    // MAC with underscores, e.g. .../dev_AA_BB_CC_DD_EE_FF.
+    std::string preferred = Config::instance()->getPreferredDevice();
+    if (!preferred.empty()) {
+        std::string needle = preferred;
+        std::replace(needle.begin(), needle.end(), ':', '_');
+        std::replace(needle.begin(), needle.end(), '-', '_');
+        for (char& c : needle) {
+            c = static_cast<char>(toupper(static_cast<unsigned char>(c)));
+        }
+
+        std::stable_partition(device_paths.begin(), device_paths.end(),
+            [&needle](const std::string& path) {
+                std::string upper = path;
+                for (char& c : upper) {
+                    c = static_cast<char>(toupper(static_cast<unsigned char>(c)));
+                }
+                return upper.find(needle) != std::string::npos;
+            });
+
+        if (!device_paths.empty()) {
+            Logger::instance()->info("Preferred device %s, trying %s first\n", preferred.c_str(), device_paths.front().c_str());
+        }
+    }
+
     for (const std::string &device_path: device_paths) {
         Logger::instance()->info("Trying to connect bluetooth device at path: %s\n", device_path.c_str());
 
@@ -203,7 +231,7 @@ void BluetoothHandler::connectDevice() {
         std::shared_ptr<DBus::PropertyProxy<bool>> deviceConnected = bluezDevice->create_property<bool>(INTERFACE_BLUEZ_DEVICE, "Connected");
 
         try {
-            if (deviceConnected) {
+            if (deviceConnected && deviceConnected->value()) {
                 Logger::instance()->info("Bluetooth device already connected, disconnecting\n");
                 disconnect();
             }
@@ -225,15 +253,24 @@ void BluetoothHandler::connectDevice() {
 }
 
 void BluetoothHandler::retryConnectLoop() {
-    bool should_exit = false;
-    std::future<void> connectWithRetryFuture = connectWithRetryPromise->get_future();
+    std::shared_ptr<std::promise<void>> promise;
+    {
+        std::lock_guard<std::mutex> lock(connectWithRetryMutex);
+        promise = connectWithRetryPromise;
+    }
 
-    while (!should_exit) {
-        connectDevice();
+    // If the promise is already gone, stopConnectWithRetry() ran before this
+    // thread started; skip the retry loop but still run the power-off below.
+    if (promise) {
+        std::future<void> connectWithRetryFuture = promise->get_future();
 
-        if (connectWithRetryFuture.wait_for(std::chrono::seconds(20)) == std::future_status::ready) {
-            should_exit = true;
-            connectWithRetryPromise = nullptr;
+        bool should_exit = false;
+        while (!should_exit) {
+            connectDevice();
+
+            if (connectWithRetryFuture.wait_for(std::chrono::seconds(20)) == std::future_status::ready) {
+                should_exit = true;
+            }
         }
     }
 
@@ -275,13 +312,25 @@ std::optional<std::thread> BluetoothHandler::connectWithRetry() {
         return std::nullopt;
     }
 
-    connectWithRetryPromise = std::make_shared<std::promise<void>>();
+    {
+        std::lock_guard<std::mutex> lock(connectWithRetryMutex);
+        connectWithRetryPromise = std::make_shared<std::promise<void>>();
+    }
     return std::thread(&BluetoothHandler::retryConnectLoop, this);
 }
 
 void BluetoothHandler::stopConnectWithRetry() {
-    if (connectWithRetryPromise) {
-        connectWithRetryPromise->set_value();
+    std::shared_ptr<std::promise<void>> promise;
+    {
+        std::lock_guard<std::mutex> lock(connectWithRetryMutex);
+        promise = connectWithRetryPromise;
+        connectWithRetryPromise = nullptr;
+    }
+
+    // Only the first caller after a connectWithRetry() gets a non-null promise,
+    // so set_value() runs exactly once and never throws future_error.
+    if (promise) {
+        promise->set_value();
     }
 }
 
